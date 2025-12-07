@@ -1,3 +1,8 @@
+
+
+
+
+
 /*******************************************************************************
 *  The "New BSD License" : http://www.opensource.org/licenses/bsd-license.php  *
 ********************************************************************************
@@ -35,6 +40,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -394,12 +400,14 @@ class Font : public Serializeable
 class Shape : public Serializeable
 {
    public:
-    Shape() : fill(Fill()), stroke(Stroke()) {}
-    Shape(const Fill &fill) : fill(fill), stroke(Stroke()) {}
-    Shape(const Stroke &stroke) : fill(Fill()), stroke(stroke) {}
-    Shape(const Fill &fill, const Stroke &stroke) : fill(fill), stroke(stroke)
-    {
-    }
+    Shape() : fill(Fill()), stroke(Stroke()), id("") {}
+    Shape(const Fill &fill) : fill(fill), stroke(Stroke()), id("") {}
+    Shape(const Fill &fill, const std::string &id) : fill(fill), stroke(Stroke()), id(id) {}
+    Shape(const Stroke &stroke) : fill(Fill()), stroke(stroke), id("") {}
+    Shape(const Stroke &stroke, const std::string &id) : fill(Fill()), stroke(stroke), id(id) {}
+    Shape(const Fill &fill, const Stroke &stroke) : fill(fill), stroke(stroke), id(""){}
+    Shape(const Fill &fill, const Stroke &stroke, const std::string &id) : fill(fill), stroke(stroke), id(id){}
+    Shape(const std::string &id) : fill(Fill()), stroke(Stroke()), id(id) {}
 
     virtual ~Shape() override {}
     virtual std::string toString(Layout const &layout) const override = 0;
@@ -408,6 +416,7 @@ class Shape : public Serializeable
    protected:
     Fill fill;
     Stroke stroke;
+    std::string id;
 };
 
 class ShapeColl : public Shape
@@ -463,15 +472,16 @@ inline std::string vectorToString(std::vector<T> collection,
 class Circle : public Shape
 {
    public:
-    Circle(Point const &center, double diameter, Fill const &fill = Fill(),
+    Circle(std::string const &id, Point const &center, double diameter, Fill const &fill = Fill(),
            Stroke const &stroke = Stroke())
-        : Shape(fill, stroke), center(center), radius(diameter / 2)
+        : Shape(fill, stroke, id), center(center), radius(diameter / 2)
     {
     }
     std::string toString(Layout const &layout) const override
     {
         std::stringstream ss;
         ss << elemStart("circle")
+           << attribute("id", id)
            << attribute("cx", translateX(center.x, layout))
            << attribute("cy", translateY(center.y, layout))
            << attribute("r", translateScale(radius, layout))
@@ -489,13 +499,99 @@ class Circle : public Shape
     Point center;
     double radius;
 };
+class Use : public Shape
+{
+   public:
+    Use(std::string const &id, Point const &pos)
+        : Shape(id), pos(pos){}
+    std::string toString(Layout const &layout) const override
+    {
+        std::stringstream ss;
+        ss << elemStart("use")
+           << attribute("xlink:href", "#"+id)
+           << attribute("x", translateX(pos.x, layout))
+           << attribute("y", translateY(pos.y, layout))
+           << emptyElemEnd();
+        return ss.str();
+    }
+    void offset(Point const &offset) override
+    {
+        pos.x += offset.x;
+        pos.y += offset.y;
+    }
+
+   private:
+    Point pos;
+};
+
+class Group : public Shape
+{
+   public:
+    Group(std::string const &id, Layout const &layout = Layout()) : Shape(id), layout(layout){}
+
+    Group &operator<<(Shape const &shape)
+    {
+        body_nodes_str_list.push_back(shape.toString(layout));
+        return *this;
+    }
+    std::string toString(Layout const &layout) const override
+    {
+        std::stringstream ss;
+        ss << elemStart("g")
+           << attribute("id",id)
+           << ">\n";
+        for (const auto &body_node_str : body_nodes_str_list)
+        {
+            ss << "\t"<< body_node_str;
+        }
+        ss << elemEnd("g");
+        return ss.str();
+    }
+    void offset(Point const &offset) override
+    {
+    }
+
+   private:
+    Layout layout;
+    std::vector<std::string> body_nodes_str_list;
+};
+class Defs : public Shape
+{
+   public:
+    Defs(Layout const &layout = Layout()) : Shape(), layout(layout){}
+
+    Defs &operator<<(Shape const &shape)
+    {
+        body_nodes_str_list.push_back(shape.toString(layout));
+        return *this;
+    }
+    std::string toString(Layout const &layout) const override
+    {
+        std::stringstream ss;
+        ss << "<defs>\n";
+        for (const auto &body_node_str : body_nodes_str_list)
+        {
+            ss << "\t"<< body_node_str;
+        }
+        ss << elemEnd("defs");
+        return ss.str();
+    }
+    void offset(Point const &offset) override
+    {
+    }
+
+   private:
+    Layout layout;
+    std::vector<std::string> body_nodes_str_list;
+};
+
 
 class Elipse : public Shape
 {
    public:
-    Elipse(Point const &center, double width, double height,
+    Elipse(std::string const &id, Point const &center, double width, double height,
            Fill const &fill = Fill(), Stroke const &stroke = Stroke())
-        : Shape(fill, stroke),
+        : Shape(fill, stroke, id),
           center(center),
           radius_width(width / 2),
           radius_height(height / 2)
@@ -505,6 +601,7 @@ class Elipse : public Shape
     {
         std::stringstream ss;
         ss << elemStart("ellipse")
+           << attribute("id", id)
            << attribute("cx", translateX(center.x, layout))
            << attribute("cy", translateY(center.y, layout))
            << attribute("rx", translateScale(radius_width, layout))
@@ -528,9 +625,9 @@ class Elipse : public Shape
 class Rectangle : public Shape
 {
    public:
-    Rectangle(Point const &edge, double width, double height,
+    Rectangle(std::string const &id, Point const &edge, double width, double height,
               Fill const &fill = Fill(), Stroke const &stroke = Stroke())
-        : Shape(fill, stroke), edge(edge), width(width), height(height)
+        : Shape(fill, stroke, id), edge(edge), width(width), height(height)
     {
     }
     std::string toString(Layout const &layout) const override
@@ -563,9 +660,14 @@ class Rectangle : public Shape
             x -= w;
         }
 
-        ss << elemStart("rect") << attribute("x", x) << attribute("y", y)
-           << attribute("width", w) << attribute("height", h)
-           << fill.toString(layout) << stroke.toString(layout)
+        ss << elemStart("rect") 
+           << attribute("id", id)
+           << attribute("x", x) 
+           << attribute("y", y)
+           << attribute("width", w) 
+           << attribute("height", h)
+           << fill.toString(layout) 
+           << stroke.toString(layout)
            << emptyElemEnd();
         return ss.str();
     }
@@ -584,15 +686,16 @@ class Rectangle : public Shape
 class Line : public Shape
 {
    public:
-    Line(Point const &start_point, Point const &end_point,
+    Line(std::string const &id, Point const &start_point, Point const &end_point,
          Stroke const &stroke = Stroke())
-        : Shape(Fill(), stroke), start_point(start_point), end_point(end_point)
+        : Shape(Fill(), stroke, id), start_point(start_point), end_point(end_point)
     {
     }
     std::string toString(Layout const &layout) const override
     {
         std::stringstream ss;
         ss << elemStart("line")
+           << attribute("id", id)
            << attribute("x1", translateX(start_point.x, layout))
            << attribute("y1", translateY(start_point.y, layout))
            << attribute("x2", translateX(end_point.x, layout))
@@ -617,8 +720,8 @@ class Line : public Shape
 class Polygon : public Shape
 {
    public:
-    explicit Polygon(Fill const &fill = Fill(), Stroke const &stroke = Stroke())
-        : Shape(fill, stroke)
+    explicit Polygon(std::string const &id, Fill const &fill = Fill(), Stroke const &stroke = Stroke())
+        : Shape(fill, stroke, id)
     {
     }
 
@@ -634,7 +737,8 @@ class Polygon : public Shape
     std::string toString(Layout const &layout) const override
     {
         std::stringstream ss;
-        ss << elemStart("polygon");
+        ss << elemStart("polygon")
+           << attribute("id", id);
 
         ss << "points=\"";
         for (unsigned i = 0; i < points.size(); ++i)
@@ -722,6 +826,7 @@ class Path : public Shape
     std::vector<std::vector<Point>> paths;
 };
 
+/*
 class Polyline : public Shape
 {
    public:
@@ -773,6 +878,7 @@ class Polyline : public Shape
     }
     std::vector<Point> points;
 };
+*/
 
 class Text : public Shape
 {
@@ -846,6 +952,7 @@ class Text : public Shape
 };
 
 // Sample charting class.
+/*
 class LineChart : public Shape
 {
    public:
@@ -937,6 +1044,7 @@ class LineChart : public Shape
                vectorToString(vertices, layout);
     }
 };
+*/
 
 class Document
 {
@@ -979,6 +1087,7 @@ class Document
             << attribute("width", layout.dimensions.width, "px")
             << attribute("height", layout.dimensions.height, "px")
             << attribute("xmlns", "http://www.w3.org/2000/svg")
+            << attribute("xmlns:xlink", "http://www.w3.org/1999/xlink")
             << attribute("version", "1.1") << ">\n";
         for (const auto &body_node_str : body_nodes_str_list)
         {
